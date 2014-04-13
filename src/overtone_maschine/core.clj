@@ -19,16 +19,43 @@
   "/Users/Shared/Maschine Library/Samples/One Shots/Distortion/Dist BitBreakup.wav"
   "/Users/Shared/Maschine Library/Samples/One Shots/Distortion/Dist CircuitBent 1.wav"))
 
-(def maschineDials (list 11 12 13 14 15 16 17 18))
-(def rolandDials   (list 4  5  6  7  8  9  10 11))
+(def maschineDials (vector 11 12 13 14 15 16 17 18))
+(def rolandDials   (vector 4  5  6  7  8  9  10 11))
 (def dialIDs maschineDials)
 
 (def dials (init-vector (count audio-files) (fn [i]
-  (list
-    (list "pitch" "volume" "pace" "duration" "attack" "decay" "sustain" "release") ;; parameter
-    (list  7       7        7      6          6        6       6         6)        ;; channel
-    dialIDs                                                                        ;; dial ID
-    (list  60      100      64     64         64       64      64        64)))))   ;; value
+  (vector
+    (vector       "pitch" "volume" "pace" "duration" "attack" "decay" "sustain" "release") ;; parameter
+    (vector       7       7        7      6          6        6       6         6)         ;; channel
+    dialIDs                                                                                ;; dial ID
+    (atom (vector 60      100      64     64         64       64      64        64))))))   ;; value
+
+(defn get-dial-ids [dial-set]
+  (nth dial-set 2))
+
+(defn get-values [dial-set]
+  (nth dial-set 3))
+
+(defn get-dial-names [dial-set]
+  (nth dial-set 0))
+
+(defn get-dial-val [dial-set dial]
+  (nth (get-values dial-set) (.indexOf (get-dial-names dial-set) dial)))
+
+(defn get-param-val [index parameter]
+  (get-dial-val (nth dials index) parameter))
+
+(defn set-dial-by-id [dial-set id value]
+  (let [dial-index (.indexOf (get-dial-ids dial-set) id)]
+    (swap! (get-values dial-set) (fn [values] (assoc dial-index value)))))
+
+(def cur-pad (atom 0))
+(defn handle-dial [channel dial value]
+  (cond
+    ((and (>= dial (first dialIDs)) (<= dial (last dialIDs))))
+      (do (set-dial-by-id (nth dials cur-pad) dial value)
+      (print (nth dials cur-pad)))
+    :else (throw (Exception. "Invalid dial."))))
 
 (overtone.live/on-event [:midi :control-change]
   (fn [{controller-number :note velocity :data1 data :velocity}]
