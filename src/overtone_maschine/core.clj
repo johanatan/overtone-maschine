@@ -21,7 +21,10 @@
   "/Users/Shared/Maschine Library/Samples/One Shots/Distortion/Dist BitBreakup.wav"
   "/Users/Shared/Maschine Library/Samples/One Shots/Distortion/Dist CircuitBent 1.wav"))
 
-(def maschineDials (vector 11 12 13 14 15 16 17 18))
+(def samples (init-vector (count audio-files) (fn [i]
+  (overtone.live/sample (nth audio-files i)))))
+
+(def maschineDials (vector 1  2  3  4  5  6   7  8))
 (def rolandDials   (vector 4  5  6  7  8  9  10 11))
 (def dialIDs maschineDials)
 
@@ -49,7 +52,7 @@
 
 (defn set-dial-by-id [dial-set id value]
   (let [dial-index (.indexOf (get-dial-ids dial-set) id)]
-    (swap! (get-values dial-set) (fn [values] (assoc dial-index value)))))
+    (swap! (get-values dial-set) (fn [values] (assoc values dial-index value)))))
 
 (defn clip [minimum maximum value]
   (max (min value maximum) minimum))
@@ -66,7 +69,7 @@
 
 (def solo (atom false))
 (def mute (atom false))
-(defn muted [] (and (not solo) mute))
+(defn muted [] (and (not @solo) @mute))
 
 (defn translate-pad [pad]
   (.indexOf (vector 12 13 14 15 8 9 10 11 4 5 6 7 0 1 2 3) pad))
@@ -75,14 +78,15 @@
   (scale 150 17500 (get-param-val index "pace")))
 
 (def cur-pad (atom 0))
-(defn handle-dial [channel dial value]
+(defn handle-dial [dial value]
   (cond
     (and (>= dial (first dialIDs)) (<= dial (last dialIDs)))
-      (do (set-dial-by-id (nth dials cur-pad) dial value)
-      (print (nth dials cur-pad)))
+      (do (set-dial-by-id (nth dials @cur-pad) dial value)
+          (println (get-values (nth dials @cur-pad))))
     :else (throw (Exception. "Invalid dial."))))
 
-(defn play-sample-vol [pad volume] ())
+(defn play-sample-vol [pad volume]
+  (overtone.live/sample-player (nth samples pad)))
 
 (def note-repeat (atom false))
 (defn handle-pad [channel pad velocity set-cur-pad]
@@ -106,12 +110,12 @@
 
 (overtone.live/on-event [:midi :control-change]
   (fn [{controller-number :note velocity :data1 data :velocity}]
-    (println controller-number velocity data)
+    (handle-dial controller-number data)
   ) ::control-handler)
 
 (overtone.live/on-event [:midi :note-on]
   (fn [m]
     (let [note (:note m)]
-      (println (overtone.live/midi->hz note) (:velocity-f m)))) ::note-handler)
+      (println note (:velocity-f m)))) ::note-handler)
 
 (defn -main [] ())
