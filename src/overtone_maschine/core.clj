@@ -1,5 +1,6 @@
 (ns overtone-maschine.core
   (:require [clojure.math.numeric-tower :as math])
+  (:require [overtone.at-at :as at-at])
   (:require [overtone.live]))
 
 (defn init-vector [length initializer]
@@ -65,6 +66,7 @@
 
 (def solo (atom false))
 (def mute (atom false))
+(defn muted [] (and (not solo) mute))
 
 (defn translate-pad [pad]
   (.indexOf (vector 12 13 14 15 8 9 10 11 4 5 6 7 0 1 2 3) pad))
@@ -75,10 +77,32 @@
 (def cur-pad (atom 0))
 (defn handle-dial [channel dial value]
   (cond
-    ((and (>= dial (first dialIDs)) (<= dial (last dialIDs))))
+    (and (>= dial (first dialIDs)) (<= dial (last dialIDs)))
       (do (set-dial-by-id (nth dials cur-pad) dial value)
       (print (nth dials cur-pad)))
     :else (throw (Exception. "Invalid dial."))))
+
+(defn play-sample-vol [pad volume] ())
+
+(def note-repeat (atom false))
+(defn handle-pad [channel pad velocity set-cur-pad]
+  (with-local-vars [mpad pad]
+    (cond
+      (and (<= mpad 15) (>= mpad 0))
+        (do (if set-cur-pad
+              (do (var-set mpad (translate-pad @mpad))
+                  (swap! cur-pad mpad)))
+            (if (> velocity 0)
+              (do (if (not (muted))
+                    (play-sample-vol mpad (min (+ 35 velocity) (get-param-val mpad "volume"))))
+                  (if note-repeat
+                    (at-at/after (get-time mpad) (fn [] (handle-pad channel mpad velocity false)))))))
+      ((= mpad 127) (toggle note-repeat velocity))
+      ((= channel 7)
+         (cond
+           (= mpad 93) (toggle-shift shift velocity false)
+           (= mpad 102) (toggle mute velocity)
+           (= mpad 30) (toggle solo velocity))))))
 
 (overtone.live/on-event [:midi :control-change]
   (fn [{controller-number :note velocity :data1 data :velocity}]
