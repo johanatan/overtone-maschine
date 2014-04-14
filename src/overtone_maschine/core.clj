@@ -1,4 +1,5 @@
 (ns overtone-maschine.core
+  (:require [clojure.math.numeric-tower :as math])
   (:require [overtone.live]))
 
 (defn init-vector [length initializer]
@@ -48,6 +49,28 @@
 (defn set-dial-by-id [dial-set id value]
   (let [dial-index (.indexOf (get-dial-ids dial-set) id)]
     (swap! (get-values dial-set) (fn [values] (assoc dial-index value)))))
+
+(defn clip [minimum maximum value]
+  (max (min value maximum) minimum))
+
+(defn scale [minimum maximum value]
+  (math/floor (+ minimum (* (/ value 127) maximum))))
+
+(defn toggle-shift [param value shiftval]
+  (swap! param (or shiftval (> value 0))))
+
+(def shift (atom false))
+(defn toggle [param value]
+  (toggle-shift param value shift))
+
+(def solo (atom false))
+(def mute (atom false))
+
+(defn translate-pad [pad]
+  (.indexOf (vector 12 13 14 15 8 9 10 11 4 5 6 7 0 1 2 3) pad))
+
+(defn get-time [index]
+  (scale 150 17500 (get-param-val index "pace")))
 
 (def cur-pad (atom 0))
 (defn handle-dial [channel dial value]
