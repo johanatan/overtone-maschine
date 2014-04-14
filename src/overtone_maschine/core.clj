@@ -45,7 +45,7 @@
   (nth dial-set 0))
 
 (defn get-dial-val [dial-set dial]
-  (nth (get-values dial-set) (.indexOf (get-dial-names dial-set) dial)))
+  (nth @(get-values dial-set) (.indexOf (get-dial-names dial-set) dial)))
 
 (defn get-param-val [index parameter]
   (get-dial-val (nth dials index) parameter))
@@ -61,7 +61,7 @@
   (math/floor (+ minimum (* (/ value 127) maximum))))
 
 (defn toggle-shift [param value shiftval]
-  (swap! param (or shiftval (> value 0))))
+  (swap! param (fn [p] (or shiftval (> value 0)))))
 
 (def shift (atom false))
 (defn toggle [param value]
@@ -86,27 +86,25 @@
     :else (throw (Exception. "Invalid dial."))))
 
 (defn play-sample-vol [pad volume]
-  (overtone.live/sample-player (nth samples pad)))
+  (overtone.live/sample-player (nth samples pad))) ;; currently ignoring dials and volume
 
 (def note-repeat (atom false))
-(defn handle-pad [channel pad velocity set-cur-pad]
+(defn handle-pad [pad velocity set-cur-pad]
   (with-local-vars [mpad pad]
     (cond
-      (and (<= mpad 15) (>= mpad 0))
+      (and (<= @mpad 15) (>= @mpad 0))
         (do (if set-cur-pad
               (do (var-set mpad (translate-pad @mpad))
-                  (swap! cur-pad mpad)))
+                  (swap! cur-pad (fn [p] mpad))))
             (if (> velocity 0)
               (do (if (not (muted))
-                    (play-sample-vol mpad (min (+ 35 velocity) (get-param-val mpad "volume"))))
-                  (if note-repeat
-                    (at-at/after (get-time mpad) (fn [] (handle-pad channel mpad velocity false)))))))
-      ((= mpad 127) (toggle note-repeat velocity))
-      ((= channel 7)
-         (cond
-           (= mpad 93) (toggle-shift shift velocity false)
-           (= mpad 102) (toggle mute velocity)
-           (= mpad 30) (toggle solo velocity))))))
+                    (play-sample-vol @mpad (min (+ 35 velocity) (get-param-val @mpad "volume"))))
+                  (if @note-repeat
+                    (at-at/after (get-time @mpad) (fn [] (handle-pad @mpad velocity false)))))))
+      (= @mpad 127) (toggle note-repeat velocity)
+      (= @mpad 93)  (toggle-shift shift velocity false)
+      (= @mpad 102) (toggle mute velocity)
+      (= @mpad 30)  (toggle solo velocity))))
 
 (overtone.live/on-event [:midi :control-change]
   (fn [{controller-number :note velocity :data1 data :velocity}]
@@ -115,7 +113,9 @@
 
 (overtone.live/on-event [:midi :note-on]
   (fn [m]
-    (let [note (:note m)]
-      (println note (:velocity-f m)))) ::note-handler)
+    (let [note (:note m)
+          velocity (:velocity-f m)]
+      (handle-pad note velocity true))
+  ) ::note-handler)
 
 (defn -main [] ())
