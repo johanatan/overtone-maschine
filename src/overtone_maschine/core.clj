@@ -42,8 +42,9 @@
   (swap! samples (fn [smps] (map overtone.live/sample (wrap-take start num-pads @audio-files)))))
 
 (defn update-samples-files [files]
-  (swap! audio-files (fn [afs] (vec files)))
-  (update-samples 0))
+  (if (> 0 (count files))
+    (swap! audio-files (fn [afs] (vec files)))
+    (update-samples 0)))
 
 (def maschineDials (vector 1  2  3  4  5  6   7  8))
 (def rolandDials   (vector 4  5  6  7  8  9  10 11))
@@ -81,16 +82,22 @@
 (defn scale [minimum maximum value]
   (math/floor (+ minimum (* (/ value 127) maximum))))
 
-(defn toggle-shift [param value shiftval]
-  (swap! param (fn [p] (or shiftval (> value 0)))))
-
-(def shift (atom false))
-(defn toggle [param value]
-  (toggle-shift param value @shift))
-
-(def solo (atom false))
-(def mute (atom false))
+(def shift (atom :off))
+(def solo (atom :off))
+(def mute (atom :off))
+(def note-repeat (atom :off))
 (defn muted [] (and (not @solo) @mute))
+
+(defn enabled [param] (or (= @param :on) (= @param :locked)))
+(defn toggle [param to]
+  (let [transform (fn [p]
+    (if (or (not (= p to)) (enabled shift))
+      (cond
+        (= p :off) (if (enabled shift) :locked :on)
+        (= p :on)  (if (and (not (= param shift)) (enabled shift)) :locked :off)
+        (= p :locked) :on)
+      p))]
+    (swap! param transform)))
 
 (defn translate-pad [pad]
   (.indexOf (vector 12 13 14 15 8 9 10 11 4 5 6 7 0 1 2 3) pad))
@@ -109,7 +116,13 @@
 (defn play-sample-vol [pad volume]
   (overtone.live/sample-player (nth @samples pad))) ;; currently ignoring dials and volume
 
-(def note-repeat (atom false))
+(defn handle-toggles [pad to]
+  (cond
+    (= pad 127) (toggle note-repeat to)
+    (= pad 93)  (toggle shift to)
+    (= pad 102) (toggle mute to)
+    (= pad 30)  (toggle solo to)))
+
 (defn handle-pad [pad velocity set-cur-pad]
   (with-local-vars [mpad pad]
     (cond
@@ -120,12 +133,9 @@
             (if (> velocity 0)
               (do (if (not (muted))
                     (play-sample-vol @mpad (min (+ 35 velocity) (get-param-val @mpad "volume"))))
-                  (if @note-repeat
+                  (if (enabled note-repeat)
                     (at-at/after (get-time @mpad) (fn [] (handle-pad @mpad velocity false)))))))
-      (= @mpad 127) (toggle note-repeat velocity)
-      (= @mpad 93)  (toggle-shift shift velocity false)
-      (= @mpad 102) (toggle mute velocity)
-      (= @mpad 30)  (toggle solo velocity))))
+      :else (handle-toggles @mpad :on))))
 
 (overtone.live/on-event [:midi :control-change]
   (fn [{controller-number :note velocity :data1 data :velocity}]
@@ -135,16 +145,14 @@
 (overtone.live/on-event [:midi :note-on]
   (fn [m]
     (let [note (:note m)
-          channel (:channel m)
-          data (:data2-f m)
           velocity (:velocity-f m)]
-      (println note channel data velocity)
       (handle-pad note velocity true))
   ) ::note-on-handler)
 
 (overtone.live/on-event [:midi :note-off]
   (fn [m]
-    (println m)
+    (let [note (:note m)]
+      (handle-toggles note :off))
   ) ::note-off-handler)
 
 (import java.io.File)
