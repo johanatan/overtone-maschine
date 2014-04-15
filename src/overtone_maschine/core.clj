@@ -9,7 +9,7 @@
       (recur (inc i) (conj! v (initializer i)))
       (persistent! v))))
 
-(def audio-files (vector
+(def audio-files (atom (vector
   "/Users/Shared/Maschine Library/Samples/One Shots/Strike/Bend ClickStart.wav"
   "/Users/Shared/Maschine Library/Samples/One Shots/Glitch/Crup Swag.wav"
   "/Users/Shared/Maschine Library/Samples/One Shots/Acoustic Note/Purehigh D6.wav"
@@ -19,16 +19,37 @@
   "/Users/Shared/Maschine Library/Samples/Instruments/Pad/Dweller Samples/Dweller c5.wav"
   "/Users/Shared/Maschine Library/Samples/Instruments/Mallet/Sansa Samples/Sansa C3.wav"
   "/Users/Shared/Maschine Library/Samples/One Shots/Distortion/Dist BitBreakup.wav"
-  "/Users/Shared/Maschine Library/Samples/One Shots/Distortion/Dist CircuitBent 1.wav"))
+  "/Users/Shared/Maschine Library/Samples/One Shots/Distortion/Dist CircuitBent 1.wav"
+  "/Users/Shared/Maschine Library/Samples/One Shots/Acoustic Note/PianoPick Eb0 Sutekh.wav"
+  "/Users/Shared/Maschine Library/Samples/One Shots/Acoustic Note/Pluck Ab4 Kitchen.wav"
+  "/Users/Shared/Maschine Library/Samples/One Shots/Acoustic Note/Trumpet B4.wav"
+  "/Users/Shared/Maschine Library/Samples/One Shots/Acoustic Note/DistGuitar Gb1.wav"
+  "/Users/Shared/Maschine Library/Samples/One Shots/Glitch/Digi Monolith B.wav"
+  "/Users/Shared/Maschine Library/Samples/One Shots/Glitch/Glitch ComeIn.wav")))
 
-(def samples (init-vector (count audio-files) (fn [i]
-  (overtone.live/sample (nth audio-files i)))))
+(def num-pads (count @audio-files))
+
+(def samples (atom (init-vector num-pads (fn [i]
+  (overtone.live/sample (nth @audio-files i))))))
+
+(defn wrap-take [start size v]
+  (let [strt (mod start (count v))
+        sz (min size (count v))
+        end-slice (subvec v strt (min (count v) (+ strt sz)))]
+    (into [] (concat end-slice (take (- sz (count end-slice)) v)))))
+
+(defn update-samples [start]
+  (swap! samples (fn [smps] (map overtone.live/sample (wrap-take start num-pads @audio-files)))))
+
+(defn update-samples-files [files]
+  (swap! audio-files (fn [afs] (vec files)))
+  (update-samples 0))
 
 (def maschineDials (vector 1  2  3  4  5  6   7  8))
 (def rolandDials   (vector 4  5  6  7  8  9  10 11))
 (def dialIDs maschineDials)
 
-(def dials (init-vector (count audio-files) (fn [i]
+(def dials (init-vector num-pads (fn [i]
   (vector
     (vector       "pitch" "volume" "pace" "duration" "attack" "decay" "sustain" "release") ;; parameter
     (vector       7       7        7      6          6        6       6         6)         ;; channel
@@ -65,7 +86,7 @@
 
 (def shift (atom false))
 (defn toggle [param value]
-  (toggle-shift param value shift))
+  (toggle-shift param value @shift))
 
 (def solo (atom false))
 (def mute (atom false))
@@ -86,7 +107,7 @@
     :else (throw (Exception. "Invalid dial."))))
 
 (defn play-sample-vol [pad volume]
-  (overtone.live/sample-player (nth samples pad))) ;; currently ignoring dials and volume
+  (overtone.live/sample-player (nth @samples pad))) ;; currently ignoring dials and volume
 
 (def note-repeat (atom false))
 (defn handle-pad [pad velocity set-cur-pad]
@@ -114,8 +135,21 @@
 (overtone.live/on-event [:midi :note-on]
   (fn [m]
     (let [note (:note m)
+          channel (:channel m)
+          data (:data2-f m)
           velocity (:velocity-f m)]
+      (println note channel data velocity)
       (handle-pad note velocity true))
-  ) ::note-handler)
+  ) ::note-on-handler)
 
-(defn -main [] ())
+(overtone.live/on-event [:midi :note-off]
+  (fn [m]
+    (println m)
+  ) ::note-off-handler)
+
+(import java.io.File)
+(defn -main [& args]
+  (let [files (mapcat (fn [path] (file-seq (File. path))) args)
+        paths (map (fn [f] (.getAbsolutePath f)) files)
+        lends-with (fn [s substr] (.endsWith (clojure.string/lower-case s) substr))]
+    (update-samples-files (filter (fn [p] (or (lends-with p ".wav") (lends-with p ".aif"))) paths))))
