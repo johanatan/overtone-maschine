@@ -53,23 +53,21 @@
 
 (def cur-offset (atom 0))
 (defn set-samples-offset [start]
-  (dosync
-    (swap! samples (fn [smps] (map overtone.live/sample (wrap-take start num-pads @audio-files))))
-    (swap! dials (fn [dls] (wrap-take start num-pads @dials)))
-    (swap! cur-offset (fn [off] start))
-    (if (= @cur-offset (math/floor @cur-offset))
-      (println @cur-offset))))
+  (if (and (= (math/floor start) start) (not (= @cur-offset start)))
+    (dosync
+      (swap! samples (fn [smps] (map overtone.live/sample (wrap-take start num-pads @audio-files))))
+      (swap! dials (fn [dls] (wrap-take start num-pads @dials)))
+      (swap! cur-offset (fn [off] start)))))
 
-(defn modulate [delta] (/ delta 3))
+(defn modulate [value] (math/floor (/ value 5)))
 
-(defn rotate-samples [coarse-delta fine-delta]
-  (let [coarse (* 10 (modulate coarse-delta))
-        fine (modulate fine-delta)]
-    (if (or (not (= coarse 0)) (not (= fine 0)))
-      (set-samples-offset (+ @cur-offset (+ coarse fine))))))
+(defn rotate-samples [coarse fine]
+  (let [c (* 10 (modulate coarse))
+        f (modulate fine)]
+    (set-samples-offset (+ c f))))
 
 (defn update-samples-files [files]
-  (if (> 0 (count files)) (do
+  (if (> 0 (count files)) (dosync
     (swap! audio-files (fn [afs] (vec files)))
     (swap! dials (fn [d] (create-dials (count @audio-files))))
     (rotate-samples 0 0))))
@@ -122,13 +120,19 @@
     (and (>= dial (first dialIDs)) (<= dial (last dialIDs)))
       (do (set-dial-by-id (nth @dials @cur-pad) dial value)
           (println (get-values (nth @dials @cur-pad))))
-    (= dial 101)
-      (do (rotate-samples 0 (- value @fine-sample-dial))
-          (swap! fine-sample-dial (fn [f] value)))
+    (or (= dial 101) (= dial 102))
+      (let [[coarse fine sample-dial]
+            (if (= dial 101)
+              [value @fine-sample-dial coarse-sample-dial]
+              [@coarse-sample-dial value fine-sample-dial])]
+        (dosync (rotate-samples coarse fine)
+          (swap! sample-dial (fn [f] value))))
     :else (throw (Exception. (format "Invalid dial: %s" dial)))))
 
 (defn play-sample-vol [pad volume]
-  (overtone.live/sample-player (nth @samples pad))) ;; currently ignoring dials and volume
+  (let [sample (nth @samples pad)]
+    (do (println cur-offset sample)
+      (overtone.live/sample-player sample)))) ;; currently ignoring dials and volume
 
 (defn handle-toggles [pad to]
   (cond
