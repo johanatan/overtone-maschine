@@ -38,49 +38,58 @@
         end-slice (subvec v strt (min (count v) (+ strt sz)))]
     (into [] (concat end-slice (take (- sz (count end-slice)) v)))))
 
-(defn update-samples [start]
-  (swap! samples (fn [smps] (map overtone.live/sample (wrap-take start num-pads @audio-files)))))
-
-(defn update-samples-files [files]
-  (if (> 0 (count files))
-    (swap! audio-files (fn [afs] (vec files)))
-    (update-samples 0)))
-
 (def maschineDials (vector 1  2  3  4  5  6   7  8))
 (def rolandDials   (vector 4  5  6  7  8  9  10 11))
 (def dialIDs maschineDials)
 
-(def dials (init-vector num-pads (fn [i]
+(defn create-dials [num] (init-vector num (fn [i]
   (vector
     (vector       "pitch" "volume" "pace" "duration" "attack" "decay" "sustain" "release") ;; parameter
     (vector       7       7        7      6          6        6       6         6)         ;; channel
     dialIDs                                                                                ;; dial ID
     (atom (vector 60      100      64     64         64       64      64        64))))))   ;; value
 
-(defn get-dial-ids [dial-set]
-  (nth dial-set 2))
+(def dials (atom (create-dials num-pads)))
 
-(defn get-values [dial-set]
-  (nth dial-set 3))
+(def cur-offset (atom 0))
+(defn set-samples-offset [start]
+  (dosync
+    (swap! samples (fn [smps] (map overtone.live/sample (wrap-take start num-pads @audio-files))))
+    (swap! dials (fn [dls] (wrap-take start num-pads @dials)))
+    (swap! cur-offset (fn [off] start))
+    (if (= @cur-offset (math/floor @cur-offset))
+      (println @cur-offset))))
 
-(defn get-dial-names [dial-set]
-  (nth dial-set 0))
+(defn modulate [delta] (/ delta 3))
+
+(defn rotate-samples [coarse-delta fine-delta]
+  (let [coarse (* 10 (modulate coarse-delta))
+        fine (modulate fine-delta)]
+    (if (or (not (= coarse 0)) (not (= fine 0)))
+      (set-samples-offset (+ @cur-offset (+ coarse fine))))))
+
+(defn update-samples-files [files]
+  (if (> 0 (count files)) (do
+    (swap! audio-files (fn [afs] (vec files)))
+    (swap! dials (fn [d] (create-dials (count @audio-files))))
+    (rotate-samples 0 0))))
+
+(defn get-dial-ids [dial-set] (nth dial-set 2))
+(defn get-values [dial-set] (nth dial-set 3))
+(defn get-dial-names [dial-set] (nth dial-set 0))
 
 (defn get-dial-val [dial-set dial]
   (nth @(get-values dial-set) (.indexOf (get-dial-names dial-set) dial)))
 
 (defn get-param-val [index parameter]
-  (get-dial-val (nth dials index) parameter))
+  (get-dial-val (nth @dials index) parameter))
 
 (defn set-dial-by-id [dial-set id value]
   (let [dial-index (.indexOf (get-dial-ids dial-set) id)]
     (swap! (get-values dial-set) (fn [values] (assoc values dial-index value)))))
 
-(defn clip [minimum maximum value]
-  (max (min value maximum) minimum))
-
-(defn scale [minimum maximum value]
-  (math/floor (+ minimum (* (/ value 127) maximum))))
+(defn clip [minimum maximum value] (max (min value maximum) minimum))
+(defn scale [minimum maximum value] (math/floor (+ minimum (* (/ value 127) maximum))))
 
 (def shift (atom :off))
 (def solo (atom :off))
@@ -105,13 +114,18 @@
 (defn get-time [index]
   (scale 150 17500 (get-param-val index "pace")))
 
+(def fine-sample-dial (atom 0))
+(def coarse-sample-dial (atom 0))
 (def cur-pad (atom 0))
 (defn handle-dial [dial value]
   (cond
     (and (>= dial (first dialIDs)) (<= dial (last dialIDs)))
-      (do (set-dial-by-id (nth dials @cur-pad) dial value)
-          (println (get-values (nth dials @cur-pad))))
-    :else (throw (Exception. "Invalid dial."))))
+      (do (set-dial-by-id (nth @dials @cur-pad) dial value)
+          (println (get-values (nth @dials @cur-pad))))
+    (= dial 101)
+      (do (rotate-samples 0 (- value @fine-sample-dial))
+          (swap! fine-sample-dial (fn [f] value)))
+    :else (throw (Exception. (format "Invalid dial: %s" dial)))))
 
 (defn play-sample-vol [pad volume]
   (overtone.live/sample-player (nth @samples pad))) ;; currently ignoring dials and volume
