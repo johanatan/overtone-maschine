@@ -141,6 +141,7 @@
     (= pad 102) (toggle mute to)
     (= pad 30)  (toggle solo to)))
 
+(def pool (at-at/mk-pool))
 (defn handle-pad [pad velocity set-cur-pad]
   (with-local-vars [mpad pad]
     (cond
@@ -152,7 +153,7 @@
               (do (if (not (muted))
                     (play-sample-vol @mpad (min (+ 35 velocity) (get-param-val @mpad "volume"))))
                   (if (enabled note-repeat)
-                    (at-at/after (get-time @mpad) (fn [] (handle-pad @mpad velocity false)))))))
+                    (at-at/after (get-time @mpad) (fn [] (handle-pad @mpad velocity false)) pool)))))
       :else (handle-toggles @mpad :on))))
 
 (overtone.live/on-event [:midi :control-change]
@@ -164,18 +165,37 @@
   (fn [m]
     (let [note (:note m)
           velocity (:velocity-f m)]
-      (handle-pad note velocity true))
-  ) ::note-on-handler)
+      (handle-pad note velocity true))) ::note-on-handler)
 
 (overtone.live/on-event [:midi :note-off]
   (fn [m]
     (let [note (:note m)]
-      (handle-toggles note :off))
-  ) ::note-off-handler)
+      (handle-toggles note :off))) ::note-off-handler)
 
+(defn issue-escape-code [code]
+  (def esc "\033[")
+  (print (clojure.string/join "" [esc code])))
+
+(defn set-cursor [x y]
+  (issue-escape-code (clojure.string/join "" [y ";" x ";f"])))
+
+(defn clear-screen []
+  (issue-escape-code "2J")
+  (set-cursor 0 0))
+
+(defn render []
+  (dosync
+    (clear-screen)
+    (def columns (->> (clojure.java.shell/sh "/bin/sh" "-c" "stty -a < /dev/tty") :out
+      (re-find #"columns (\d+)") second))
+    (set-cursor 50 0)
+    (println (clojure.string/join "" [columns " testing " (System/currentTimeMillis)]))))
+
+(def frames-per-sec 35)
 (import java.io.File)
 (defn -main [& args]
   (let [files (mapcat (fn [path] (file-seq (File. path))) args)
         paths (map (fn [f] (.getAbsolutePath f)) files)
         lends-with (fn [s substr] (.endsWith (clojure.string/lower-case s) substr))]
     (update-samples-files (filter (fn [p] (or (lends-with p ".wav") (lends-with p ".aif"))) paths))))
+;;  (at-at/every (/ 1000 frames-per-sec) render pool))
