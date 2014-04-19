@@ -59,15 +59,15 @@
       (swap! dials (fn [dls] (wrap-take start num-pads @dials)))
       (swap! cur-offset (fn [off] start)))))
 
-(defn modulate [value] (math/floor (/ value 5)))
+(defn modulate [value] (math/floor (/ value 3)))
 
 (defn rotate-samples [coarse fine]
-  (let [c (* 10 (modulate coarse))
-        f (modulate fine)]
+  (let [c (* 16 (modulate coarse))
+        f (* 4 (modulate fine))]
     (set-samples-offset (+ c f))))
 
 (defn update-samples-files [files]
-  (if (> 0 (count files)) (dosync
+  (if (> (count files) 0) (dosync
     (swap! audio-files (fn [afs] (vec files)))
     (swap! dials (fn [d] (create-dials (count @audio-files))))
     (rotate-samples 0 0))))
@@ -106,8 +106,8 @@
       p))]
     (swap! param transform)))
 
-(defn translate-pad [pad]
-  (.indexOf (vector 12 13 14 15 8 9 10 11 4 5 6 7 0 1 2 3) pad))
+(def pad-map (vector 12 13 14 15 8 9 10 11 4 5 6 7 0 1 2 3))
+(defn translate-pad [pad] (.indexOf pad-map pad))
 
 (defn get-time [index]
   (scale 150 17500 (get-param-val index "pace")))
@@ -176,20 +176,59 @@
   (def esc "\033[")
   (print (clojure.string/join "" [esc code])))
 
-(defn set-cursor [x y]
-  (issue-escape-code (clojure.string/join "" [y ";" x ";f"])))
+(defn set-cursor [x y] (issue-escape-code (clojure.string/join "" [y ";" x ";f"])))
 
 (defn clear-screen []
   (issue-escape-code "2J")
   (set-cursor 0 0))
 
+(defn sum [vals] (reduce + vals))
+
+(defn draw-pad-grid [columns]
+  (def max-pad-width 25)
+  (def pads-per-row 4)
+  (defn get-pad-text [i max-width]
+    (def filename
+      (clojure.string/join
+        (drop-last (clojure.string/split (.name (nth @samples i)) #"\."))))
+    (def idx (format "%02d" (+ 1 i)))
+    (def joined (clojure.string/join " " [idx filename]))
+    (.substring joined 0 (min (.length joined) max-width)))
+  (def pad-width (min (/ columns pads-per-row) max-pad-width))
+  (def width-reducer (fn [[acc prev] cur]
+    (let [nxt (+ cur acc)
+          nxt-floor (math/floor nxt)
+          nxt-acc (- nxt nxt-floor)]
+      [nxt-acc nxt])))
+  (def widths
+    (into [] (rest (mapcat rest (reductions width-reducer [0 0] (repeat pads-per-row pad-width))))))
+  (def sum-pads (sum widths))
+  (def offset-x (- columns sum-pads))
+  (def rows (map (partial into []) (partition pads-per-row pad-map)))
+  (def row-data (map vector (range (count rows)) (map vector (repeat (count rows) widths) rows)))
+  (def print-row (fn [[y [widths pads]]]
+    (def row-reducer (fn [acc [width pad]]
+      (set-cursor acc (+ y 1))
+      (print (get-pad-text pad width))
+      (+ acc width)))
+    (reduce row-reducer offset-x (map vector widths pads))))
+  (dorun (map print-row row-data)))
+
+(def schedule (atom nil))
 (defn render []
-  (dosync
-    (clear-screen)
+  (try
     (def columns (->> (clojure.java.shell/sh "/bin/sh" "-c" "stty -a < /dev/tty") :out
       (re-find #"columns (\d+)") second))
-    (set-cursor 50 0)
-    (println (clojure.string/join "" [columns " testing " (System/currentTimeMillis)]))))
+    (dosync
+      (clear-screen)
+      (print (System/currentTimeMillis))
+      (set-cursor 1 2)
+      (print (count @audio-files))
+      (set-cursor 1 3)
+      (print @cur-offset)
+      (draw-pad-grid (read-string columns))
+      (flush))
+    (catch Exception e (do (println e) (at-at/stop @schedule)))))
 
 (def frames-per-sec 35)
 (import java.io.File)
@@ -197,5 +236,5 @@
   (let [files (mapcat (fn [path] (file-seq (File. path))) args)
         paths (map (fn [f] (.getAbsolutePath f)) files)
         lends-with (fn [s substr] (.endsWith (clojure.string/lower-case s) substr))]
-    (update-samples-files (filter (fn [p] (or (lends-with p ".wav") (lends-with p ".aif"))) paths))))
-;;  (at-at/every (/ 1000 frames-per-sec) render pool))
+    (update-samples-files (filter (fn [p] (or (lends-with p ".wav") (lends-with p ".aif"))) paths)))
+  (swap! schedule (fn [s] (at-at/every (/ 1000 frames-per-sec) render pool))))
