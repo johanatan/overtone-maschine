@@ -176,7 +176,7 @@
   (def esc "\033[")
   (print (clojure.string/join "" [esc code])))
 
-(defn set-cursor [x y] (issue-escape-code (clojure.string/join "" [y ";" x ";f"])))
+(defn set-cursor [x y] (issue-escape-code (clojure.string/join "" [(+ y 1) ";" (+ x 1) ";f"])))
 
 (defn clear-screen []
   (issue-escape-code "2J")
@@ -193,13 +193,13 @@
         (drop-last (clojure.string/split (.name (nth @samples i)) #"\."))))
     (def idx (format "%02d" (+ 1 i)))
     (def joined (clojure.string/join " " [idx filename]))
-    (.substring joined 0 (min (.length joined) max-width)))
+    (format "%s " (.substring joined 0 (min (.length joined) (- max-width 1)))))
   (def pad-width (min (/ columns pads-per-row) max-pad-width))
   (def width-reducer (fn [[acc prev] cur]
     (let [nxt (+ cur acc)
           nxt-floor (math/floor nxt)
           nxt-acc (- nxt nxt-floor)]
-      [nxt-acc nxt])))
+      [nxt-acc nxt-floor])))
   (def widths
     (into [] (rest (mapcat rest (reductions width-reducer [0 0] (repeat pads-per-row pad-width))))))
   (def sum-pads (sum widths))
@@ -208,7 +208,7 @@
   (def row-data (map vector (range (count rows)) (map vector (repeat (count rows) widths) rows)))
   (def print-row (fn [[y [widths pads]]]
     (def row-reducer (fn [acc [width pad]]
-      (set-cursor acc (+ y 1))
+      (set-cursor acc y)
       (print (get-pad-text pad width))
       (+ acc width)))
     (reduce row-reducer offset-x (map vector widths pads))))
@@ -222,9 +222,9 @@
     (dosync
       (clear-screen)
       (print (System/currentTimeMillis))
-      (set-cursor 1 2)
+      (set-cursor 0 1)
       (print (count @audio-files))
-      (set-cursor 1 3)
+      (set-cursor 0 2)
       (print @cur-offset)
       (draw-pad-grid (read-string columns))
       (flush))
