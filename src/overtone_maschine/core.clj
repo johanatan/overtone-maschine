@@ -131,7 +131,7 @@
 
 (defn play-sample-vol [pad volume]
   (let [sample (nth @samples pad)]
-    (do (println cur-offset sample)
+    (do
       (overtone.live/sample-player sample)))) ;; currently ignoring dials and volume
 
 (defn handle-toggles [pad to]
@@ -141,6 +141,7 @@
     (= pad 102) (toggle mute to)
     (= pad 30)  (toggle solo to)))
 
+(def pad-press (atom [0 0]))
 (def pool (at-at/mk-pool))
 (defn handle-pad [pad velocity set-cur-pad]
   (with-local-vars [mpad pad]
@@ -150,8 +151,9 @@
               (do (var-set mpad (translate-pad @mpad))
                   (swap! cur-pad (fn [p] mpad))))
             (if (> velocity 0)
-              (do (if (not (muted))
-                    (play-sample-vol @mpad (min (+ 35 velocity) (get-param-val @mpad "volume"))))
+              (do (if (not (muted)) (do
+                    (if set-cur-pad (swap! pad-press (fn [v] [@mpad (System/currentTimeMillis)])))
+                    (play-sample-vol @mpad (min (+ 35 velocity) (get-param-val @mpad "volume")))))
                   (if (enabled note-repeat)
                     (at-at/after (get-time @mpad) (fn [] (handle-pad @mpad velocity false)) pool)))))
       :else (handle-toggles @mpad :on))))
@@ -189,16 +191,17 @@
 
 (defn sum [vals] (reduce + vals))
 
+(defn get-pad-text [i max-width]
+  (def filename
+    (clojure.string/join
+      (drop-last (clojure.string/split (.name (nth @samples i)) #"\."))))
+  (def idx (format "%02d" (+ 1 i)))
+  (def joined (clojure.string/join " " [idx filename]))
+  (format "%s " (.substring joined 0 (min (.length joined) (- max-width 1)))))
+
 (defn draw-pad-grid []
   (def max-pad-width 25)
   (def pads-per-row 4)
-  (defn get-pad-text [i max-width]
-    (def filename
-      (clojure.string/join
-        (drop-last (clojure.string/split (.name (nth @samples i)) #"\."))))
-    (def idx (format "%02d" (+ 1 i)))
-    (def joined (clojure.string/join " " [idx filename]))
-    (format "%s " (.substring joined 0 (min (.length joined) (- max-width 1)))))
   (def pad-width (min (/ @columns pads-per-row) max-pad-width))
   (def width-reducer (fn [[acc prev] cur]
     (let [nxt (+ cur acc)
@@ -224,12 +227,16 @@
   (try
     (dosync
       (clear-screen)
-      (print (System/currentTimeMillis))
+      (def cur-time (System/currentTimeMillis))
+      (print cur-time)
       (set-cursor 0 1)
       (print (count @audio-files))
       (set-cursor 0 2)
       (print @cur-offset)
       (draw-pad-grid)
+      (if (> (nth @pad-press 1) (- cur-time 600))
+        (do (set-cursor 0 3)
+            (print (get-pad-text (nth @pad-press 0) @columns))))
       (flush))
     (catch Exception e (do (println e) (at-at/stop @schedule)))))
 
