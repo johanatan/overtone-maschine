@@ -178,13 +178,18 @@
 
 (defn set-cursor [x y] (issue-escape-code (clojure.string/join "" [(+ y 1) ";" (+ x 1) ";f"])))
 
+(def rows (atom 0))
+(def columns (atom 0))
 (defn clear-screen []
+  (def tty-info (clojure.java.shell/sh "/bin/sh" "-c" "stty -a < /dev/tty"))
+  (swap! rows (fn [r] (read-string (->> tty-info :out (re-find #"rows (\d+)") second))))
+  (swap! columns (fn [c] (read-string (->> tty-info :out (re-find #"columns (\d+)") second))))
   (issue-escape-code "2J")
   (set-cursor 0 0))
 
 (defn sum [vals] (reduce + vals))
 
-(defn draw-pad-grid [columns]
+(defn draw-pad-grid []
   (def max-pad-width 25)
   (def pads-per-row 4)
   (defn get-pad-text [i max-width]
@@ -194,7 +199,7 @@
     (def idx (format "%02d" (+ 1 i)))
     (def joined (clojure.string/join " " [idx filename]))
     (format "%s " (.substring joined 0 (min (.length joined) (- max-width 1)))))
-  (def pad-width (min (/ columns pads-per-row) max-pad-width))
+  (def pad-width (min (/ @columns pads-per-row) max-pad-width))
   (def width-reducer (fn [[acc prev] cur]
     (let [nxt (+ cur acc)
           nxt-floor (math/floor nxt)
@@ -203,9 +208,9 @@
   (def widths
     (into [] (rest (mapcat rest (reductions width-reducer [0 0] (repeat pads-per-row pad-width))))))
   (def sum-pads (sum widths))
-  (def offset-x (- columns sum-pads))
-  (def rows (map (partial into []) (partition pads-per-row pad-map)))
-  (def row-data (map vector (range (count rows)) (map vector (repeat (count rows) widths) rows)))
+  (def offset-x (- @columns sum-pads))
+  (def p-rows (map (partial into []) (partition pads-per-row pad-map)))
+  (def row-data (map vector (range (count p-rows)) (map vector (repeat (count p-rows) widths) p-rows)))
   (def print-row (fn [[y [widths pads]]]
     (def row-reducer (fn [acc [width pad]]
       (set-cursor acc y)
@@ -217,8 +222,6 @@
 (def schedule (atom nil))
 (defn render []
   (try
-    (def columns (->> (clojure.java.shell/sh "/bin/sh" "-c" "stty -a < /dev/tty") :out
-      (re-find #"columns (\d+)") second))
     (dosync
       (clear-screen)
       (print (System/currentTimeMillis))
@@ -226,7 +229,7 @@
       (print (count @audio-files))
       (set-cursor 0 2)
       (print @cur-offset)
-      (draw-pad-grid (read-string columns))
+      (draw-pad-grid)
       (flush))
     (catch Exception e (do (println e) (at-at/stop @schedule)))))
 
