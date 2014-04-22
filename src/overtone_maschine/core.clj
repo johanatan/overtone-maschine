@@ -61,15 +61,19 @@
 
 (defn modulate [value] (math/floor (/ value 3)))
 
+(def samples-per-coarse-tick num-pads)
+(def samples-per-fine-tick (/ samples-per-coarse-tick 4))
+(def max-files (+ (* samples-per-coarse-tick (modulate 128)) (* samples-per-fine-tick (modulate 128))))
 (defn rotate-samples [coarse fine]
-  (let [c (* 16 (modulate coarse))
-        f (* 4 (modulate fine))]
+  (let [c (* samples-per-coarse-tick (modulate coarse))
+        f (* samples-per-fine-tick (modulate fine))]
     (set-samples-offset (+ c f))))
 
 (defn update-samples-files [files]
   (if (> (count files) 0) (dosync
-    (swap! audio-files (fn [afs] (vec files)))
+    (swap! audio-files (fn [afs] (vec (take max-files files))))
     (swap! dials (fn [d] (create-dials (count @audio-files))))
+    (dorun (map (fn [f] (do (print ".") (flush) (overtone.live/sample f))) @audio-files))
     (rotate-samples 0 0))))
 
 (defn get-dial-ids [dial-set] (nth dial-set 2))
