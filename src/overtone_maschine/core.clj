@@ -133,12 +133,21 @@
           (swap! sample-dial (fn [f] value))))
     :else (throw (Exception. (format "Invalid dial: %s" dial)))))
 
+(overtone.live/definst sampled-inst
+  [level 1 rate 1 loop? 0 attack 0 decay 1 sustain 1 release 0.1 curve -4 gate 1]
+    (let [FREE overtone.live/FREE
+          env (overtone.live/env-gen
+                (overtone.live/adsr attack decay sustain release level curve) :gate gate :action FREE)]
+      (* env (overtone.live/scaled-play-buf 2 (first @samples) :rate rate :level level :loop loop? :action FREE))))
+
 (defn play-sample-vol [pad volume]
   (let [sample (nth @samples pad)]
     (do
       (overtone.live/sample-player sample)))) ;; currently ignoring dials and volume
 
+(def debug-string (atom ""))
 (defn handle-toggles [pad to]
+  ;;(swap! debug-string (fn [s] (.toString pad)))
   (cond
     (= pad 127) (toggle note-repeat to)
     (= pad 93)  (toggle shift to)
@@ -226,6 +235,10 @@
     (reduce row-reducer offset-x (map vector widths pads))))
   (dorun (map print-row row-data)))
 
+(defn print-at [x y string]
+  (set-cursor x y)
+  (print string))
+
 (def schedule (atom nil))
 (defn render []
   (try
@@ -238,9 +251,11 @@
       (set-cursor 0 2)
       (print @cur-offset)
       (draw-pad-grid)
-      (if (> (nth @pad-press 1) (- cur-time 600))
-        (do (set-cursor 0 3)
-            (print (get-pad-text (nth @pad-press 0) @columns))))
+      (if (> (nth @pad-press 1) (- cur-time 600)) (print-at 0 3 (get-pad-text (nth @pad-press 0) @columns)))
+      (if (not (= @note-repeat :off)) (print-at 0 4 "note-repeat"))
+      (if (not (= @solo :off)) (print-at 12 4 "solo"))
+      (if (not (= @mute :off)) (print-at 17 4 "mute"))
+      (if (> (.length @debug-string) 0) (print-at 0 5 (format "debug: %s" @debug-string)))
       (flush))
     (catch Exception e (do (println e) (at-at/stop @schedule)))))
 
