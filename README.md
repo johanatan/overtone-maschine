@@ -1,6 +1,6 @@
 # overtone-maschine
 
-A Clojure application designed to make overtones with maschine.
+A Clojure application designed to make overtones with MASCHINE.
 
 ## Usage
 

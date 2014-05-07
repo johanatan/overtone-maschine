@@ -162,7 +162,7 @@
       (and (<= @mpad 15) (>= @mpad 0))
         (do (if set-cur-pad
               (do (var-set mpad (translate-pad @mpad))
-                  (swap! cur-pad (fn [p] mpad))))
+                  (swap! cur-pad (fn [p] @mpad))))
             (if (> velocity 0)
               (do (if (not (muted)) (do
                     (if set-cur-pad (swap! pad-press (fn [v] [@mpad (System/currentTimeMillis)])))
@@ -192,6 +192,11 @@
   (print (clojure.string/join "" [esc code])))
 
 (defn set-cursor [x y] (issue-escape-code (clojure.string/join "" [(+ y 1) ";" (+ x 1) ";f"])))
+
+(defn print-inverted [sz]
+  (issue-escape-code "7m")
+  (print sz)
+  (issue-escape-code "27m"))
 
 (def rows (atom 0))
 (def columns (atom 0))
@@ -230,7 +235,8 @@
   (def print-row (fn [[y [widths pads]]]
     (def row-reducer (fn [acc [width pad]]
       (set-cursor acc y)
-      (print (get-pad-text pad width))
+      (def printer (if (= pad @cur-pad) print-inverted print))
+      (printer (get-pad-text pad width))
       (+ acc width)))
     (reduce row-reducer offset-x (map vector widths pads))))
   (dorun (map print-row row-data)))
