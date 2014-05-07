@@ -3,6 +3,8 @@
   (:require [overtone.at-at :as at-at])
   (:require [overtone.live]))
 
+(def debug-string (atom ""))
+
 (defn init-vector [length initializer]
   (loop [i 0 v (transient [])]
     (if (< i length)
@@ -49,14 +51,15 @@
     dialIDs                                                                                ;; dial ID
     (atom (vector 60      100      64     64         64       64      64        64))))))   ;; value
 
-(def dials (atom (create-dials num-pads)))
+(def all-dials (atom (create-dials num-pads)))
+(def dials (atom @all-dials))
 
 (def cur-offset (atom 0))
 (defn set-samples-offset [start]
   (if (and (= (math/floor start) start) (not (= @cur-offset start)))
     (dosync
       (swap! samples (fn [smps] (map overtone.live/sample (wrap-take start num-pads @audio-files))))
-      (swap! dials (fn [dls] (wrap-take start num-pads @dials)))
+      (swap! dials (fn [dls] (wrap-take start num-pads @all-dials)))
       (swap! cur-offset (fn [off] start)))))
 
 (defn modulate [value] (math/floor (/ value 3)))
@@ -72,7 +75,7 @@
 (defn update-samples-files [files]
   (if (> (count files) 0) (dosync
     (swap! audio-files (fn [afs] (vec (take max-files files))))
-    (swap! dials (fn [d] (create-dials (count @audio-files))))
+    (swap! all-dials (fn [d] (create-dials (count @audio-files))))
     (dorun (map (fn [f] (do (print ".") (flush) (overtone.live/sample f))) @audio-files))
     (rotate-samples 0 0))))
 
@@ -122,8 +125,7 @@
 (defn handle-dial [dial value]
   (cond
     (and (>= dial (first dialIDs)) (<= dial (last dialIDs)))
-      (do (set-dial-by-id (nth @dials @cur-pad) dial value)
-          (println (get-values (nth @dials @cur-pad))))
+      (set-dial-by-id (nth @dials @cur-pad) dial value)
     (or (= dial 101) (= dial 102))
       (let [[coarse fine sample-dial]
             (if (= dial 101)
@@ -145,7 +147,6 @@
     (do
       (overtone.live/sample-player sample)))) ;; currently ignoring dials and volume
 
-(def debug-string (atom ""))
 (defn handle-toggles [pad to]
   ;;(swap! debug-string (fn [s] (.toString pad)))
   (cond
@@ -217,7 +218,7 @@
   (def joined (clojure.string/join " " [idx filename]))
   (format "%s " (.substring joined 0 (min (.length joined) (- max-width 1)))))
 
-(defn draw-pad-grid []
+(defn render-pads [offset-y]
   (def max-pad-width 25)
   (def pads-per-row 4)
   (def pad-width (min (/ @columns pads-per-row) max-pad-width))
@@ -234,7 +235,7 @@
   (def row-data (map vector (range (count p-rows)) (map vector (repeat (count p-rows) widths) p-rows)))
   (def print-row (fn [[y [widths pads]]]
     (def row-reducer (fn [acc [width pad]]
-      (set-cursor acc y)
+      (set-cursor acc (+ offset-y y))
       (def printer (if (= pad @cur-pad) print-inverted print))
       (printer (get-pad-text pad width))
       (+ acc width)))
@@ -245,23 +246,44 @@
   (set-cursor x y)
   (print string))
 
+(defn render-toggles [offset-y]
+  (if (not (= @note-repeat :off)) (print-at 0 offset-y "note-repeat"))
+  (if (not (= @solo :off)) (print-at 12 offset-y "solo"))
+  (if (not (= @mute :off)) (print-at 17 offset-y "mute")))
+
+(defn render-stats [offset-y]
+  (set-cursor 0 offset-y)
+  (def cur-time (System/currentTimeMillis))
+  (print cur-time)
+  (set-cursor 0 (+ offset-y 1))
+  (print (format "%s samples loaded" (count @audio-files))))
+
+(defn rpad [size string]
+  (.substring (format "%s%s" string (apply str (repeat size " "))) 0 size))
+
+(defn lpad [size string]
+  (clojure.string/reverse (rpad size (clojure.string/reverse string))))
+
+(defn render-dials [offset-y]
+  (let [dials (nth @dials @cur-pad)
+        labels (first dials)
+        values (map (fn [v] (lpad (.length (nth v 1)) (.toString (nth v 0)))) (map vector @(nth dials 3) labels))]
+    (set-cursor 0 offset-y)
+    (print (clojure.string/join " " labels))
+    (set-cursor 0 (+ 1 offset-y))
+    (print (clojure.string/join " " values))))
+
 (def schedule (atom nil))
 (defn render []
   (try
     (dosync
       (clear-screen)
-      (def cur-time (System/currentTimeMillis))
-      (print cur-time)
-      (set-cursor 0 1)
-      (print (count @audio-files))
-      (set-cursor 0 2)
-      (print @cur-offset)
-      (draw-pad-grid)
-      (if (> (nth @pad-press 1) (- cur-time 600)) (print-at 0 3 (get-pad-text (nth @pad-press 0) @columns)))
-      (if (not (= @note-repeat :off)) (print-at 0 4 "note-repeat"))
-      (if (not (= @solo :off)) (print-at 12 4 "solo"))
-      (if (not (= @mute :off)) (print-at 17 4 "mute"))
-      (if (> (.length @debug-string) 0) (print-at 0 5 (format "debug: %s" @debug-string)))
+      (render-stats 3)
+      (render-dials 0)
+      (render-pads 3)
+      (if (> (nth @pad-press 1) (- cur-time 600)) (print-at 0 6 (get-pad-text (nth @pad-press 0) @columns)))
+      (render-toggles 8)
+      (if (> (.length @debug-string) 0) (print-at 0 8 (format "Debug: %s" @debug-string)))
       (flush))
     (catch Exception e (do (println e) (at-at/stop @schedule)))))
 
