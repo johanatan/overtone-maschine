@@ -1,7 +1,7 @@
 (ns overtone-maschine.core
   (:require [clojure.math.numeric-tower :as math])
   (:require [overtone.at-at :as at-at])
-  (:require [overtone.live]))
+  (:require [overtone.live :as ot.l]))
 
 (def debug-string (atom ""))
 
@@ -32,7 +32,7 @@
 (def num-pads (count @audio-files))
 
 (def samples (atom (init-vector num-pads (fn [i]
-  (overtone.live/sample (nth @audio-files i))))))
+  (ot.l/sample (nth @audio-files i))))))
 
 (defn wrap-take [start size v]
   (let [strt (mod start (count v))
@@ -58,7 +58,7 @@
 (defn set-samples-offset [start]
   (if (and (= (math/floor start) start) (not (= @cur-offset start)))
     (dosync
-      (swap! samples (fn [smps] (map overtone.live/sample (wrap-take start num-pads @audio-files))))
+      (swap! samples (fn [smps] (map ot.l/sample (wrap-take start num-pads @audio-files))))
       (swap! dials (fn [dls] (wrap-take start num-pads @all-dials)))
       (swap! cur-offset (fn [off] start)))))
 
@@ -76,7 +76,7 @@
   (if (> (count files) 0) (dosync
     (swap! audio-files (fn [afs] (vec (take max-files files))))
     (swap! all-dials (fn [d] (create-dials (count @audio-files))))
-    (dorun (map (fn [f] (do (print ".") (flush) (overtone.live/sample f))) @audio-files))
+    (dorun (map (fn [f] (do (print ".") (flush) (ot.l/sample f))) @audio-files))
     (rotate-samples 0 0))))
 
 (defn get-dial-ids [dial-set] (nth dial-set 2))
@@ -94,7 +94,9 @@
     (swap! (get-values dial-set) (fn [values] (assoc values dial-index value)))))
 
 (defn clip [minimum maximum value] (max (min value maximum) minimum))
-(defn scale [minimum maximum value] (math/floor (+ minimum (* (/ value 127) maximum))))
+(defn scale-val [minimum maximum value valuemax] (+ minimum (* (/ value valuemax) maximum)))
+(defn scale-float [minimum maximum value] (scale-val minimum maximum value 127))
+(defn scale [minimum maximum value] (math/floor (scale-float minimum maximum value)))
 
 (def shift (atom :off))
 (def solo (atom :off))
@@ -116,7 +118,7 @@
 (def pad-map (vector 12 13 14 15 8 9 10 11 4 5 6 7 0 1 2 3))
 (defn translate-pad [pad] (.indexOf pad-map pad))
 
-(defn get-time [index]
+(defn get-delay [index]
   (scale 150 17500 (get-param-val index "pace")))
 
 (def fine-sample-dial (atom 0))
@@ -135,20 +137,33 @@
           (swap! sample-dial (fn [f] value))))
     :else (throw (Exception. (format "Invalid dial: %s" dial)))))
 
-(overtone.live/definst sampled-inst
+(ot.l/definst sampled-inst
   [level 1 rate 1 loop? 0 attack 0 decay 1 sustain 1 release 0.1 curve -4 gate 1]
-    (let [FREE overtone.live/FREE
-          env (overtone.live/env-gen
-                (overtone.live/adsr attack decay sustain release level curve) :gate gate :action FREE)]
-      (* env (overtone.live/scaled-play-buf 2 (first @samples) :rate rate :level level :loop loop? :action FREE))))
+    (let [FREE ot.l/FREE
+          env (ot.l/env-gen
+                (ot.l/adsr attack decay sustain release level curve) :gate gate :action FREE)]
+      (* env (ot.l/scaled-play-buf 2 (first @samples) :rate rate :level level :loop loop? :action FREE))))
+
+(ot.l/defsynth stretch-sample [buf 0 shift 1 pitch 1]
+  (let [buff  (ot.l/play-buf 2 buf pitch)
+        chain (ot.l/fft (ot.l/local-buf 2048 2) buff)]
+       (ot.l/out 0 (ot.l/pan2 (* 0.5 (ot.l/ifft (ot.l/pv-mag-shift chain 1 shift)))))))
+
+(defn distrib [value maximum]
+  (let [compute-y (fn [x] (+ 1 (Math/pow (- x 1) 3)))
+        y (compute-y (scale-float 0.0 2.0 (double value)))]
+    (swap! debug-string (fn [s] (format "value: %s, y: %s" value y)))
+    (if (> y 1) (scale-val 1.0 (double maximum) (- y 1.0) 1.0) y)))
 
 (defn play-sample-vol [pad volume]
-  (let [sample (nth @samples pad)]
+  (let [sample (nth @samples pad)
+        shift (distrib (get-param-val pad "duration") 500)
+        pitch (distrib (get-param-val pad "pitch") 10)]
     (do
-      (overtone.live/sample-player sample)))) ;; currently ignoring dials and volume
+      ;;(swap! debug-string (fn [s] (format "shift: %s, pitch: %s" shift pitch)))
+      (stretch-sample sample shift pitch)))) ;; currently ignoring volume
 
 (defn handle-toggles [pad to]
-  ;;(swap! debug-string (fn [s] (.toString pad)))
   (cond
     (= pad 127) (toggle note-repeat to)
     (= pad 93)  (toggle shift to)
@@ -169,21 +184,21 @@
                     (if set-cur-pad (swap! pad-press (fn [v] [@mpad (System/currentTimeMillis)])))
                     (play-sample-vol @mpad (min (+ 35 velocity) (get-param-val @mpad "volume")))))
                   (if (enabled note-repeat)
-                    (at-at/after (get-time @mpad) (fn [] (handle-pad @mpad velocity false)) pool)))))
+                    (at-at/after (get-delay @mpad) (fn [] (handle-pad @mpad velocity false)) pool)))))
       :else (handle-toggles @mpad :on))))
 
-(overtone.live/on-event [:midi :control-change]
+(ot.l/on-event [:midi :control-change]
   (fn [{controller-number :note velocity :data1 data :velocity}]
     (handle-dial controller-number data)
   ) ::control-handler)
 
-(overtone.live/on-event [:midi :note-on]
+(ot.l/on-event [:midi :note-on]
   (fn [m]
     (let [note (:note m)
           velocity (:velocity-f m)]
       (handle-pad note velocity true))) ::note-on-handler)
 
-(overtone.live/on-event [:midi :note-off]
+(ot.l/on-event [:midi :note-off]
   (fn [m]
     (let [note (:note m)]
       (handle-toggles note :off))) ::note-off-handler)
@@ -202,45 +217,43 @@
 (def rows (atom 0))
 (def columns (atom 0))
 (defn clear-screen []
-  (def tty-info (clojure.java.shell/sh "/bin/sh" "-c" "stty -a < /dev/tty"))
-  (swap! rows (fn [r] (read-string (->> tty-info :out (re-find #"rows (\d+)") second))))
-  (swap! columns (fn [c] (read-string (->> tty-info :out (re-find #"columns (\d+)") second))))
-  (issue-escape-code "2J")
-  (set-cursor 0 0))
+  (let [tty-info (clojure.java.shell/sh "/bin/sh" "-c" "stty -a < /dev/tty")]
+    (swap! rows (fn [r] (read-string (->> tty-info :out (re-find #"; (\d+) rows;") second))))
+    (swap! columns (fn [c] (read-string (->> tty-info :out (re-find #"; (\d+) columns;") second))))
+    (issue-escape-code "2J")
+    (set-cursor 0 0)))
 
 (defn sum [vals] (reduce + vals))
 
 (defn get-pad-text [i max-width]
-  (def filename
-    (clojure.string/join
-      (drop-last (clojure.string/split (.name (nth @samples i)) #"\."))))
-  (def idx (format "%02d" (+ 1 i)))
-  (def joined (clojure.string/join " " [idx filename]))
-  (format "%s " (.substring joined 0 (min (.length joined) (- max-width 1)))))
+  (let [filename (clojure.string/join
+                  (drop-last (clojure.string/split (.name (nth @samples i)) #"\."))) 
+        idx (format "%02d" (+ 1 i))
+        joined (clojure.string/join " " [idx filename])]
+    (format "%s " (.substring joined 0 (min (.length joined) (- max-width 1))))))
 
 (defn render-pads [offset-y]
-  (def max-pad-width 25)
-  (def pads-per-row 4)
-  (def pad-width (min (/ @columns pads-per-row) max-pad-width))
-  (def width-reducer (fn [[acc prev] cur]
-    (let [nxt (+ cur acc)
-          nxt-floor (math/floor nxt)
-          nxt-acc (- nxt nxt-floor)]
-      [nxt-acc nxt-floor])))
-  (def widths
-    (into [] (rest (mapcat rest (reductions width-reducer [0 0] (repeat pads-per-row pad-width))))))
-  (def sum-pads (sum widths))
-  (def offset-x (- @columns sum-pads))
-  (def p-rows (map (partial into []) (partition pads-per-row pad-map)))
-  (def row-data (map vector (range (count p-rows)) (map vector (repeat (count p-rows) widths) p-rows)))
-  (def print-row (fn [[y [widths pads]]]
-    (def row-reducer (fn [acc [width pad]]
-      (set-cursor acc (+ offset-y y))
-      (def printer (if (= pad @cur-pad) print-inverted print))
-      (printer (get-pad-text pad width))
-      (+ acc width)))
-    (reduce row-reducer offset-x (map vector widths pads))))
-  (dorun (map print-row row-data)))
+  (let [max-pad-width 25
+        pads-per-row 4
+        pad-width (min (/ @columns pads-per-row) max-pad-width)
+        width-reducer (fn [[acc prev] cur]
+                        (let [nxt (+ cur acc)
+                              nxt-floor (math/floor nxt)
+                              nxt-acc (- nxt nxt-floor)]
+                          [nxt-acc nxt-floor]))
+        widths (into [] (rest (mapcat rest (reductions width-reducer [0 0] (repeat pads-per-row pad-width)))))
+        sum-pads (sum widths)
+        offset-x (- @columns sum-pads)
+        p-rows (map (partial into []) (partition pads-per-row pad-map))
+        row-data (map vector (range (count p-rows)) (map vector (repeat (count p-rows) widths) p-rows))
+        print-row (fn [[y [widths pads]]]
+                    (let [row-reducer (fn [acc [width pad]]
+                                        (set-cursor acc (+ offset-y y))
+                                        (def printer (if (= pad @cur-pad) print-inverted print))
+                                        (printer (get-pad-text pad width))
+                                        (+ acc width))]
+                      (reduce row-reducer offset-x (map vector widths pads))))]
+    (dorun (map print-row row-data))))
 
 (defn print-at [x y string]
   (set-cursor x y)
@@ -253,10 +266,11 @@
 
 (defn render-stats [offset-y]
   (set-cursor 0 offset-y)
-  (def cur-time (System/currentTimeMillis))
-  (print cur-time)
-  (set-cursor 0 (+ offset-y 1))
-  (print (format "%s samples loaded" (count @audio-files))))
+  (let [cur-time (System/currentTimeMillis)]
+    (print cur-time)
+    (set-cursor 0 (+ offset-y 1))
+    (print (format "%s samples loaded" (count @audio-files)))
+    cur-time))
 
 (defn rpad [size string]
   (.substring (format "%s%s" string (apply str (repeat size " "))) 0 size))
@@ -278,13 +292,13 @@
   (try
     (dosync
       (clear-screen)
-      (render-stats 3)
-      (render-dials 0)
-      (render-pads 3)
-      (if (> (nth @pad-press 1) (- cur-time 600)) (print-at 0 6 (get-pad-text (nth @pad-press 0) @columns)))
-      (render-toggles 8)
-      (if (> (.length @debug-string) 0) (print-at 0 8 (format "Debug: %s" @debug-string)))
-      (flush))
+      (let [cur-time (render-stats 3)]
+        (render-dials 0)
+        (render-pads 3)
+        (if (> (nth @pad-press 1) (- cur-time 600)) (print-at 0 6 (get-pad-text (nth @pad-press 0) @columns)))
+        (render-toggles 8)
+        (if (> (.length @debug-string) 0) (print-at 0 9 (format "Debug: %s" @debug-string)))
+        (flush)))
     (catch Exception e (do (println e) (at-at/stop @schedule)))))
 
 (def frames-per-sec 35)
