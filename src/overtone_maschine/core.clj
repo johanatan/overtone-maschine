@@ -1,7 +1,7 @@
 (ns overtone-maschine.core
-  (:require [clojure.math.numeric-tower :as math])
-  (:require [overtone.at-at :as at-at])
-  (:require [overtone.live :as ot.l]))
+  (:require [clojure.math.numeric-tower :as math]
+            [overtone.at-at :as at-at]
+            [overtone.live :as ot]))
 
 (def debug-string (atom ""))
 
@@ -32,7 +32,7 @@
 (def num-pads (count @audio-files))
 
 (def samples (atom (init-vector num-pads (fn [i]
-  (ot.l/sample (nth @audio-files i))))))
+  (ot/sample (nth @audio-files i))))))
 
 (defn wrap-take [start size v]
   (let [strt (mod start (count v))
@@ -58,9 +58,9 @@
 (defn set-samples-offset [start]
   (if (and (= (math/floor start) start) (not (= @cur-offset start)))
     (dosync
-      (swap! samples (fn [smps] (map ot.l/sample (wrap-take start num-pads @audio-files))))
-      (swap! dials (fn [dls] (wrap-take start num-pads @all-dials)))
-      (swap! cur-offset (fn [off] start)))))
+     (reset! samples (map ot/sample (wrap-take start num-pads @audio-files)))
+     (reset! dials (wrap-take start num-pads @all-dials))
+     (reset! cur-offset start))))
 
 (defn modulate [value] (math/floor (/ value 3)))
 
@@ -73,11 +73,12 @@
     (set-samples-offset (+ c f))))
 
 (defn update-samples-files [files]
-  (if (> (count files) 0) (dosync
-    (swap! audio-files (fn [afs] (vec (take max-files files))))
-    (swap! all-dials (fn [d] (create-dials (count @audio-files))))
-    (dorun (map (fn [f] (do (print ".") (flush) (ot.l/sample f))) @audio-files))
-    (rotate-samples 0 0))))
+  (if (> (count files) 0)
+    (dosync
+      (reset! audio-files (vec (take max-files files)))
+      (reset! all-dials (create-dials (count @audio-files)))
+      (dorun (map #(do (print ".") (flush) (ot/sample %)) @audio-files))
+      (rotate-samples 0 0))))
 
 (defn get-dial-ids [dial-set] (nth dial-set 2))
 (defn get-values [dial-set] (nth dial-set 3))
@@ -91,7 +92,7 @@
 
 (defn set-dial-by-id [dial-set id value]
   (let [dial-index (.indexOf (get-dial-ids dial-set) id)]
-    (swap! (get-values dial-set) (fn [values] (assoc values dial-index value)))))
+    (swap! (get-values dial-set) assoc dial-index value)))
 
 (defn clip [minimum maximum value] (max (min value maximum) minimum))
 (defn scale-val [minimum maximum value valuemax] (+ minimum (* (/ value valuemax) maximum)))
@@ -102,15 +103,15 @@
 (def solo (atom :off))
 (def mute (atom :off))
 (def note-repeat (atom :off))
-(defn muted [] (and (not @solo) @mute))
+(defn enabled? [param] (or (= @param :on) (= @param :locked)))
+(defn muted? [] (and (not (enabled? solo)) (enabled? mute)))
 
-(defn enabled [param] (or (= @param :on) (= @param :locked)))
 (defn toggle [param to]
   (let [transform (fn [p]
-    (if (or (not (= p to)) (enabled shift))
+    (if (or (not (= p to)) (enabled? shift))
       (cond
-        (= p :off) (if (enabled shift) :locked :on)
-        (= p :on)  (if (and (not (= param shift)) (enabled shift)) :locked :off)
+        (= p :off) (if (enabled? shift) :locked :on)
+        (= p :on)  (if (and (not (= param shift)) (enabled? shift)) :locked :off)
         (= p :locked) :on)
       p))]
     (swap! param transform)))
@@ -134,33 +135,34 @@
               [value @fine-sample-dial coarse-sample-dial]
               [@coarse-sample-dial value fine-sample-dial])]
         (dosync (rotate-samples coarse fine)
-          (swap! sample-dial (fn [f] value))))
+                (reset! sample-dial value)))
     :else (throw (Exception. (format "Invalid dial: %s" dial)))))
 
-(ot.l/definst sampled-inst
+(ot/definst sampled-inst
   [level 1 rate 1 loop? 0 attack 0 decay 1 sustain 1 release 0.1 curve -4 gate 1]
-    (let [FREE ot.l/FREE
-          env (ot.l/env-gen
-                (ot.l/adsr attack decay sustain release level curve) :gate gate :action FREE)]
-      (* env (ot.l/scaled-play-buf 2 (first @samples) :rate rate :level level :loop loop? :action FREE))))
+    (let [FREE ot/FREE
+          env (ot/env-gen
+                (ot/adsr attack decay sustain release level curve) :gate gate :action FREE)]
+      (* env (ot/scaled-play-buf 2 (first @samples) :rate rate :level level :loop loop? :action FREE))))
 
-(ot.l/defsynth stretch-sample [buf 0 shift 1 pitch 1]
-  (let [buff  (ot.l/play-buf 2 buf pitch)
-        chain (ot.l/fft (ot.l/local-buf 2048 2) buff)]
-       (ot.l/out 0 (ot.l/pan2 (* 0.5 (ot.l/ifft (ot.l/pv-mag-shift chain 1 shift)))))))
+(ot/defsynth stretch-sample [buf 0 shift 1 pitch 1]
+  (let [buff  (ot/play-buf 2 buf pitch)
+        chain (ot/fft (ot/local-buf 2048 2) buff)]
+       (ot/out 0 (ot/pan2 (* 0.5 (ot/ifft (ot/pv-mag-shift chain 1 shift)))))))
 
 (defn distrib [value maximum]
   (let [compute-y (fn [x] (+ 1 (Math/pow (- x 1) 3)))
         y (compute-y (scale-float 0.0 2.0 (double value)))]
-    (swap! debug-string (fn [s] (format "value: %s, y: %s" value y)))
+    (reset! debug-string (format "value: %s, y: %s" value y))
     (if (> y 1) (scale-val 1.0 (double maximum) (- y 1.0) 1.0) y)))
 
 (defn play-sample-vol [pad volume]
+  (reset! debug-string "playing sample")
   (let [sample (nth @samples pad)
         shift (distrib (get-param-val pad "duration") 500)
         pitch (distrib (get-param-val pad "pitch") 10)]
     (do
-      ;;(swap! debug-string (fn [s] (format "shift: %s, pitch: %s" shift pitch)))
+      ;;(reset! debug-string (format "shift: %s, pitch: %s" shift pitch))
       (stretch-sample sample shift pitch)))) ;; currently ignoring volume
 
 (defn handle-toggles [pad to]
@@ -172,33 +174,34 @@
 
 (def pad-press (atom [0 0]))
 (def pool (at-at/mk-pool))
-(defn handle-pad [pad velocity set-cur-pad]
+(defn handle-pad [pad velocity set-cur-pad?]
   (with-local-vars [mpad pad]
     (cond
       (and (<= @mpad 15) (>= @mpad 0))
-        (do (if set-cur-pad
-              (do (var-set mpad (translate-pad @mpad))
-                  (swap! cur-pad (fn [p] @mpad))))
-            (if (> velocity 0)
-              (do (if (not (muted)) (do
-                    (if set-cur-pad (swap! pad-press (fn [v] [@mpad (System/currentTimeMillis)])))
-                    (play-sample-vol @mpad (min (+ 35 velocity) (get-param-val @mpad "volume")))))
-                  (if (enabled note-repeat)
-                    (at-at/after (get-delay @mpad) (fn [] (handle-pad @mpad velocity false)) pool)))))
+        (do (when set-cur-pad?
+              (var-set mpad (translate-pad @mpad))
+              (reset! cur-pad @mpad))
+            (when (> velocity 0)
+              (when (not (muted?))
+                (if set-cur-pad? (reset! pad-press [@mpad (System/currentTimeMillis)]))
+                (play-sample-vol @mpad (min (+ 35 velocity) (get-param-val @mpad "volume"))))
+              (when (enabled? note-repeat)
+                (let [closure (partial handle-pad @mpad velocity false)]
+                  (at-at/after (get-delay @mpad) closure pool)))))
       :else (handle-toggles @mpad :on))))
 
-(ot.l/on-event [:midi :control-change]
+(ot/on-event [:midi :control-change]
   (fn [{controller-number :note velocity :data1 data :velocity}]
     (handle-dial controller-number data)
   ) ::control-handler)
 
-(ot.l/on-event [:midi :note-on]
+(ot/on-event [:midi :note-on]
   (fn [m]
     (let [note (:note m)
           velocity (:velocity-f m)]
       (handle-pad note velocity true))) ::note-on-handler)
 
-(ot.l/on-event [:midi :note-off]
+(ot/on-event [:midi :note-off]
   (fn [m]
     (let [note (:note m)]
       (handle-toggles note :off))) ::note-off-handler)
@@ -218,8 +221,8 @@
 (def columns (atom 0))
 (defn clear-screen []
   (let [tty-info (clojure.java.shell/sh "/bin/sh" "-c" "stty -a < /dev/tty")]
-    (swap! rows (fn [r] (read-string (->> tty-info :out (re-find #"; (\d+) rows;") second))))
-    (swap! columns (fn [c] (read-string (->> tty-info :out (re-find #"; (\d+) columns;") second))))
+    (reset! rows (read-string (->> tty-info :out (re-find #"; (\d+) rows;") second)))
+    (reset! columns (read-string (->> tty-info :out (re-find #"; (\d+) columns;") second)))
     (issue-escape-code "2J")
     (set-cursor 0 0)))
 
@@ -308,4 +311,4 @@
         paths (map (fn [f] (.getAbsolutePath f)) files)
         lends-with (fn [s substr] (.endsWith (clojure.string/lower-case s) substr))]
     (update-samples-files (filter (fn [p] (or (lends-with p ".wav") (lends-with p ".aif"))) paths)))
-  (swap! schedule (fn [s] (at-at/every (/ 1000 frames-per-sec) render pool))))
+  (reset! schedule (at-at/every (/ 1000 frames-per-sec) render pool)))
